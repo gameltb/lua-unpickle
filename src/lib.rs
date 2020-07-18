@@ -151,8 +151,8 @@ pub fn unpickle(filepath: &str, skipbyte: u64) -> Result<Value, Box<dyn std::err
 mod tests {
     #[test]
     fn test_read() {
-        let filepath = "tabs";
-        let tabs = crate::unpickle(filepath, 4).unwrap();
+        let filepath = "cache";
+        let tabs = super::unpickle(filepath, 4).unwrap();
         let filepath = std::path::PathBuf::from(filepath);
         for (name, tab) in tabs.as_object().unwrap() {
             let mut file = std::fs::File::create(
@@ -160,11 +160,8 @@ mod tests {
                     .parent()
                     .or(Some(std::env::current_dir().unwrap().as_path()))
                     .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .to_string()
-                    + name
-                    + ".json",
+                    .clone()
+                    .join(name.to_owned() + ".json")
             )
             .unwrap();
             use std::io::Write;
