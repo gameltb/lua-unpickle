@@ -1,10 +1,12 @@
 use serde_json::{Map, Number, Value};
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{prelude::*, BufReader, SeekFrom};
 
 #[derive(Debug)]
 struct LuaPickle {
     file: BufReader<File>,
+    reuseMap: HashMap<u64, Value>,
 }
 
 enum Strsize {
@@ -14,11 +16,15 @@ enum Strsize {
 
 impl LuaPickle {
     fn read(&mut self) -> Result<(u8, Value), Box<dyn std::error::Error>> {
+        let startpos = self.file.seek(SeekFrom::Current(0)).unwrap();
+
         let mut type_char = [0u8; 1];
         self.file.read_exact(&mut type_char).unwrap();
 
         let mut type_char = type_char[0];
-        let content = match type_char {
+        let reuseflag = (type_char & 0x80) == 0x80;
+        type_char = type_char & 0b01111111;
+        let mut content = match type_char {
             0x00 => Value::default(),
             0x01 => Value::Bool(true),
             0x02 => Value::Bool(false),
@@ -90,7 +96,24 @@ impl LuaPickle {
                 Value::default()
             }
         };
-        //println!("{} => {:?}",type_char,content);
+        if reuseflag {
+            self.reuseMap.insert(startpos, content.clone());
+            if (type_char == 0x03)
+                || (type_char == 0x04)
+                || (type_char == 0x05)
+                || (type_char == 0x06)
+            {
+                if content.is_u64() {
+                    if let Some(v) = self.reuseMap.get(&content.as_u64().unwrap()) {
+                        content = v.clone();
+                    } else {
+                        println!("pos = {} t = {}", startpos, content.as_u64().unwrap());
+                    }
+                }
+            } else if (type_char != 0x08) && (type_char != 0x09) {
+                // println!("pos = {} t = {}", startpos, content);
+            }
+        }
         Ok((type_char, content))
     }
     fn readtab(&mut self, count: u32) -> Result<Value, Box<dyn std::error::Error>> {
@@ -134,7 +157,8 @@ impl LuaPickle {
         self.file
             .by_ref()
             .take(strlen as u64)
-            .read_to_string(&mut string).unwrap();
+            .read_to_string(&mut string)
+            .unwrap();
         Ok(Value::String(string))
     }
 }
@@ -146,7 +170,10 @@ pub fn unpickle(filepath: &str, skipbyte: u64) -> Result<Value, Box<dyn std::err
 
     file.seek(SeekFrom::Start(skipbyte)).unwrap();
 
-    let mut an_pickle = LuaPickle { file };
+    let mut an_pickle = LuaPickle {
+        file,
+        reuseMap: HashMap::new(),
+    };
     let (_, dict) = an_pickle.read().unwrap();
 
     Ok(dict)
@@ -157,7 +184,7 @@ mod tests {
     #[test]
     fn test_read() {
         let filepath = "cache";
-        let tabs = super::unpickle(filepath, 4).unwrap();
+        let tabs = super::unpickle(filepath, 2).unwrap();
         let filepath = std::path::PathBuf::from(filepath);
         for (name, tab) in tabs.as_object().unwrap() {
             let mut file = std::fs::File::create(
@@ -166,11 +193,11 @@ mod tests {
                     .or(Some(std::env::current_dir().unwrap().as_path()))
                     .unwrap()
                     .clone()
-                    .join(name.to_owned() + ".json")
+                    .join(name.to_owned() + ".json"),
             )
             .unwrap();
             use std::io::Write;
-            file.write(tab.to_string().as_bytes()).unwrap();
+            file.write(format!("{:#}", tab).as_bytes()).unwrap();
         }
     }
 }
